@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:widget="http://www.netvibes.com/ns/">
+<head>
+  <!-- ===== UWA widget metadata (read by 3DDashboard) ===== -->
+  <meta name="author" content="Your Company" />
+  <meta name="description" content="Search 3DEXPERIENCE objects by Title and Description" />
+  <meta name="apiVersion" content="1.3" />
+  <meta name="debugMode" content="false" />
+  <meta name="strictMode" content="false" />
+  <meta name="autoRefresh" content="0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Title &amp; Description Search</title>
+
+  <!-- UWA runtime: lets the page also open standalone in a browser for UI checks -->
+  <link rel="stylesheet" type="text/css" href="https://uwa.netvibes.com/lib/c/UWA/assets/css/standalone.css" />
+  <script type="text/javascript" src="https://uwa.netvibes.com/lib/c/UWA/js/UWA_Standalone_Alone.js"></script>
+
+  <!-- ===== Preferences shown in the widget's Properties panel ===== -->
+  <widget:preferences>
+    <widget:preference type="list" name="matchMode" label="Match mode" defaultValue="words">
+      <widget:option value="words" label="All words (prefix match)" />
+      <widget:option value="phrase" label="Exact phrase" />
+    </widget:preference>
+    <widget:preference type="list" name="combine" label="Combine Title and Description with" defaultValue="AND">
+      <widget:option value="AND" label="AND (both must match)" />
+      <widget:option value="OR" label="OR (either may match)" />
+    </widget:preference>
+    <widget:preference type="text" name="typeFilter" label="Restrict to type (optional, e.g. VPMReference)" defaultValue="" />
+    <widget:preference type="range" name="maxResults" label="Maximum results" defaultValue="50" step="10" min="10" max="500" />
+    <widget:preference type="text" name="securityContext" label="Security context override (optional)" defaultValue="" />
+    <widget:preference type="text" name="searchUrlOverride" label="Search service URL override (optional)" defaultValue="" />
+  </widget:preferences>
+
+  <style>
+    :root {
+      --navy: #005386;      /* platform header blue */
+      --sky: #368ec4;       /* action blue */
+      --ink: #3d3d3d;
+      --muted: #77797c;
+      --line: #d1d4d4;
+      --tint: #f1f1f1;
+      --surface: #ffffff;
+      --hit: #fff3c4;
+      --error: #c62a2a;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--surface); }
+    body {
+      font-family: "3ds", Arial, Helvetica, sans-serif;
+      font-size: 13px; color: var(--ink);
+      display: flex; flex-direction: column;
+    }
+
+    /* --- search bar: the two fields sit side by side --- */
+    .bar { padding: 12px 12px 10px; border-bottom: 1px solid var(--line); background: var(--tint); }
+    .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+    .field input {
+      width: 100%; height: 32px; padding: 0 10px;
+      border: 1px solid var(--line); border-radius: 3px;
+      font: inherit; color: var(--ink); background: var(--surface);
+    }
+    .field input:focus { outline: 2px solid var(--sky); outline-offset: -1px; border-color: var(--sky); }
+    .actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+    button {
+      height: 30px; padding: 0 14px; border-radius: 3px; font: inherit; cursor: pointer;
+      border: 1px solid var(--sky); background: var(--surface); color: var(--sky);
+    }
+    button.primary { background: var(--sky); color: #fff; }
+    button:hover { filter: brightness(0.95); }
+    button:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+    button:disabled { opacity: .5; cursor: default; }
+    .status { margin-left: auto; color: var(--muted); font-size: 12px; }
+    .status.error { color: var(--error); }
+
+    /* --- results --- */
+    .results { flex: 1; overflow: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      position: sticky; top: 0; background: var(--surface); text-align: left;
+      font-weight: normal; color: var(--muted); font-size: 12px;
+      padding: 8px 10px; border-bottom: 2px solid var(--navy); white-space: nowrap;
+    }
+    td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    tr[draggable="true"] { cursor: grab; }
+    tbody tr:hover { background: var(--tint); }
+    td.title { color: var(--navy); font-weight: bold; }
+    td.desc { max-width: 380px; color: var(--ink); }
+    mark { background: var(--hit); color: inherit; padding: 0 1px; }
+    .empty { padding: 40px 16px; text-align: center; color: var(--muted); line-height: 1.5; }
+
+    @media (max-width: 520px) {
+      .fields { grid-template-columns: 1fr; }   /* stack only on very narrow widgets */
+      td.desc { max-width: none; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="bar">
+    <div class="fields">
+      <div class="field">
+        <label for="titleInput">Title</label>
+        <input id="titleInput" type="search" placeholder="e.g. valve housing" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label for="descInput">Description</label>
+        <input id="descInput" type="search" placeholder="e.g. stainless steel" autocomplete="off" />
+      </div>
+    </div>
+    <div class="actions">
+      <button id="searchBtn" class="primary" type="button">Search</button>
+      <button id="clearBtn" type="button">Clear</button>
+      <span id="status" class="status" role="status" aria-live="polite"></span>
+    </div>
+  </div>
+
+  <div class="results" id="results">
+    <div class="empty">Type in Title, Description, or both, then press Search or Enter.</div>
+  </div>
+
+  <script type="text/javascript">
+  /* global widget, require, UWA */
+  (function () {
+    'use strict';
+
+    // Predicates (6W tags) returned for each hit. Add more if your tenant indexes them.
+    var SELECT = [
+      'ds6w:label', 'ds6w:description', 'ds6w:type', 'ds6w:status',
+      'ds6w:responsible', 'ds6w:modified', 'ds6w:identifier', 'resourceid', 'physicalid', 'type'
+    ];
+
+    var state = { platformId: null, spaceUrl: null, searchUrl: null, securityContext: null, ready: false };
+    var $ = function (id) { return document.getElementById(id); };
+
+    // ---------- small helpers ----------
+    function setStatus(text, isError) {
+      var el = $('status');
+      el.textContent = text || '';
+      el.className = 'status' + (isError ? ' error' : '');
+    }
+    function escapeHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+    function highlight(text, raw) {
+      var safe = escapeHtml(text);
+      var words = (raw || '').trim().split(/\s+/).filter(Boolean)
+        .map(function (w) { return w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); });
+      if (!words.length) return safe;
+      return safe.replace(new RegExp('(' + words.join('|') + ')', 'gi'), '<mark>$1</mark>');
+    }
+    function pref(name, fallback) {
+      var v = widget.getValue(name);
+      return (v === undefined || v === null || v === '') ? fallback : v;
+    }
+
+    // ---------- query building (3DSearch / federated query syntax) ----------
+    // words mode : "valve hous"  -> ([ds6w:label]:valve* AND [ds6w:label]:hous*)
+    // phrase mode: "valve hous"  -> [ds6w:label]:"valve hous"
+    function clause(predicate, raw, mode) {
+      var text = (raw || '').trim();
+      if (!text) return null;
+      if (mode === 'phrase') {
+        return '[' + predicate + ']:"' + text.replace(/["\\]/g, '') + '"';
+      }
+      var words = text.split(/\s+/)
+        .map(function (w) { return w.replace(/[^\p{L}\p{N}_\-.]/gu, ''); })
+        .filter(Boolean);
+      if (!words.length) return null;
+      var parts = words.map(function (w) { return '[' + predicate + ']:' + w + '*'; });
+      return parts.length === 1 ? parts[0] : '(' + parts.join(' AND ') + ')';
+    }
+
+    function buildQuery(title, desc) {
+      var mode = pref('matchMode', 'words');
+      var joiner = ' ' + pref('combine', 'AND') + ' ';
+      var clauses = [clause('ds6w:label', title, mode), clause('ds6w:description', desc, mode)]
+        .filter(Boolean);
+      if (!clauses.length) return null;
+      var q = clauses.length > 1 ? '(' + clauses.join(joiner) + ')' : clauses[0];
+      var typeFilter = (pref('typeFilter', '') || '').trim();
+      if (typeFilter) q += ' AND [ds6w:type]:"' + typeFilter.replace(/["\\]/g, '') + '"';
+      return q;
+    }
+
+    // ---------- platform plumbing ----------
+    function init(WAFData, Compass) {
+      state.platformId = widget.getValue('x3dPlatformId');
+      if (!state.platformId) {
+        setStatus('Add this widget to a 3DEXPERIENCE dashboard to search.', true);
+        return;
+      }
+      setStatus('Connecting…');
+
+      Compass.getPlatformServices({
+        platformId: state.platformId,
+        onComplete: function (services) {
+          var s = Array.isArray(services) ? services[0] : services;
+          state.spaceUrl = s && s['3DSpace'];
+          // The search service key name varies by release; take the first key containing "search".
+          var searchKey = s && Object.keys(s).filter(function (k) { return /search/i.test(k); })[0];
+          var override = (pref('searchUrlOverride', '') || '').trim();
+          state.searchUrl = normalizeSearchUrl(override || (searchKey && s[searchKey]));
+
+          if (!state.spaceUrl || !state.searchUrl) {
+            setStatus('Could not find the 3DSpace or search service URL. Set “Search service URL override” in the widget properties.', true);
+            return;
+          }
+          loadSecurityContext(WAFData);
+        },
+        onFailure: function () { setStatus('Could not read platform services.', true); }
+      });
+    }
+
+    function normalizeSearchUrl(url) {
+      if (!url) return null;
+      url = String(url).replace(/\/+$/, '');
+      if (!/\/search$/.test(url)) url += /\/federated$/.test(url) ? '/search' : '/federated/search';
+      return url;
+    }
+
+    function loadSecurityContext(WAFData) {
+      var override = (pref('securityContext', '') || '').trim();
+      if (override) { state.securityContext = override; return ready(); }
+
+      WAFData.authenticatedRequest(
+        state.spaceUrl + '/resources/modeler/pno/person?current=true&select=preferredcredentials&select=collabspaces',
+        {
+          method: 'GET', type: 'json',
+          onComplete: function (resp) {
+            var pc = resp && resp.preferredcredentials;
+            if (pc && pc.role && pc.organization && pc.collabspace) {
+              state.securityContext = 'ctx::' + pc.role.name + '.' + pc.organization.name + '.' + pc.collabspace.name;
+            } else if (resp && resp.collabspaces && resp.collabspaces.length) {
+              var cs = resp.collabspaces[0], c = cs.couples && cs.couples[0];
+              if (c) state.securityContext = 'ctx::' + c.role.name + '.' + c.organization.name + '.' + cs.name;
+            }
+            ready();
+          },
+          onFailure: function () { ready(); } // search can still run without an explicit context
+        }
+      );
+    }
+
+    function ready() {
+      state.ready = true;
+      setStatus('Ready');
+      $('titleInput').focus();
+    }
+
+    // ---------- search ----------
+    function runSearch(WAFData, DnD) {
+      if (!state.ready) {
+        setStatus(state.platformId
+          ? 'Still connecting to the platform. Try again in a moment.'
+          : 'Search works only when this widget is added through Run Your App or as a registered app, not in Web Page Reader.', true);
+        return;
+      }
+      var title = $('titleInput').value, desc = $('descInput').value;
+      var query = buildQuery(title, desc);
+      if (!query) { setStatus('Enter a Title or a Description to search.', true); return; }
+
+      var body = {
+        label: 'title-desc-search-' + Date.now(),
+        locale: (widget.lang || 'en').substring(0, 2),
+        select_predicate: SELECT,
+        with_indexing_date: true,
+        with_nls: false,
+        query: query,
+        order_by: 'desc',
+        order_field: 'relevance',
+        nresults: parseInt(pref('maxResults', 50), 10) || 50,
+        start: '0',
+        source: ['3dspace'],
+        tenant: state.platformId
+      };
+      if (state.securityContext) body.login = { '3dspace': { SecurityContext: state.securityContext } };
+
+      $('searchBtn').disabled = true;
+      setStatus('Searching…');
+
+      WAFData.authenticatedRequest(state.searchUrl + '?xrequestedwith=xmlhttprequest', {
+        method: 'POST',
+        type: 'json',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        data: JSON.stringify(body),
+        timeout: 60000,
+        onComplete: function (resp) {
+          $('searchBtn').disabled = false;
+          renderResults(resp, title, desc, DnD);
+        },
+        onFailure: function (err, resp) {
+          $('searchBtn').disabled = false;
+          var msg = (resp && (resp.error || resp.message)) || (err && err.message) || 'unknown error';
+          setStatus('Search failed: ' + msg, true);
+        }
+      });
+    }
+
+    function attrs(result) {
+      var out = {};
+      (result.attributes || []).forEach(function (a) {
+        out[a.name] = Array.isArray(a.value) ? a.value.join(', ') : a.value;
+      });
+      return out;
+    }
+
+    function renderResults(resp, title, desc, DnD) {
+      var list = (resp && resp.results) || [];
+      var total = resp && resp.infos && resp.infos.nmatches;
+      var box = $('results');
+
+      if (!list.length) {
+        box.innerHTML = '<div class="empty">No objects match these terms. Try fewer words, switch Match mode to “All words”, or combine with OR in the widget properties.</div>';
+        setStatus('0 results');
+        return;
+      }
+
+      var rows = list.map(function (r, i) {
+        var a = attrs(r);
+        return '<tr draggable="true" data-i="' + i + '">' +
+          '<td class="title">' + highlight(a['ds6w:label'], title) + '</td>' +
+          '<td class="desc">' + highlight(a['ds6w:description'], desc) + '</td>' +
+          '<td>' + escapeHtml(a['ds6w:type']) + '</td>' +
+          '<td>' + escapeHtml(a['ds6w:status']) + '</td>' +
+          '<td>' + escapeHtml(a['ds6w:responsible']) + '</td>' +
+          '<td>' + escapeHtml((a['ds6w:modified'] || '').substring(0, 10)) + '</td>' +
+        '</tr>';
+      }).join('');
+
+      box.innerHTML =
+        '<table><thead><tr><th>Title</th><th>Description</th><th>Type</th><th>Maturity</th><th>Owner</th><th>Modified</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody></table>';
+
+      setStatus(list.length + (total && total > list.length ? ' of ' + total : '') + ' results');
+
+      // Make each row draggable to other 3DEXPERIENCE widgets (3DXContent protocol)
+      if (DnD) {
+        box.querySelectorAll('tbody tr').forEach(function (tr) {
+          var a = attrs(list[+tr.getAttribute('data-i')]);
+          var id = a.physicalid || a.resourceid;
+          if (!id) return;
+          try {
+            DnD.draggable(tr, {
+              data: JSON.stringify({
+                protocol: '3DXContent', version: '1.1',
+                source: widget.getValue('appId') || 'CUSTOM_SEARCH',
+                widgetId: widget.id,
+                data: { items: [{
+                  envId: state.platformId, serviceId: '3DSpace', contextId: state.securityContext || '',
+                  objectId: id, objectType: a.type || a['ds6w:type'],
+                  displayName: a['ds6w:label'], displayType: a['ds6w:type']
+                }] }
+              })
+            });
+          } catch (e) { /* drag is optional */ }
+        });
+      }
+    }
+
+    function clearAll() {
+      $('titleInput').value = '';
+      $('descInput').value = '';
+      $('results').innerHTML = '<div class="empty">Type in Title, Description, or both, then press Search or Enter.</div>';
+      setStatus(state.ready ? 'Ready' : '');
+      $('titleInput').focus();
+    }
+
+    // ---------- bootstrap ----------
+    var started = false;
+    function start() {
+      // UWA fires onLoad again when preferences are saved: re-read settings, don't rebind.
+      if (started) { state.ready = false; if (start.reinit) start.reinit(); return; }
+      started = true;
+      if (typeof require !== 'function') {
+        setStatus('Running outside a 3DEXPERIENCE widget container: layout preview only.', true);
+        var explain = function () {
+          setStatus('Search needs the 3DEXPERIENCE widget container. Load this URL with Run Your App (not Web Page Reader or a normal tab).', true);
+        };
+        $('searchBtn').addEventListener('click', explain);
+        ['titleInput', 'descInput'].forEach(function (id) {
+          $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') explain(); });
+        });
+        return;
+      }
+      require([
+        'DS/WAFData/WAFData',
+        'DS/i3DXCompassServices/i3DXCompassServices',
+        'DS/DataDragAndDrop/DataDragAndDrop'
+      ], function (WAFData, Compass, DnD) {
+        var go = function () { runSearch(WAFData, DnD); };
+        $('searchBtn').addEventListener('click', go);
+        $('clearBtn').addEventListener('click', clearAll);
+        ['titleInput', 'descInput'].forEach(function (id) {
+          $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+        });
+        widget.addEvent('onRefresh', go);
+        start.reinit = function () { init(WAFData, Compass); };
+        init(WAFData, Compass);
+      }, function () {
+        setStatus('Platform modules unavailable: open this widget from a 3DEXPERIENCE dashboard.', true);
+      });
+    }
+
+    if (typeof widget !== 'undefined' && widget.addEvent) {
+      widget.addEvent('onLoad', start);
+    } else {
+      document.addEventListener('DOMContentLoaded', start);
+    }
+  })();
+  </script>
+</body>
+</html>
