@@ -111,6 +111,7 @@
     <div class="actions">
       <button id="searchBtn" class="primary" type="button">Search</button>
       <button id="clearBtn" type="button">Clear</button>
+      <button id="detailsBtn" type="button" title="Show connection details and log">Details</button>
       <span id="status" class="status" role="status" aria-live="polite"></span>
     </div>
   </div>
@@ -186,32 +187,83 @@
     }
 
     // ---------- platform plumbing ----------
+    // ---------- diagnostics: everything is logged with this prefix in the browser console ----------
+    var diag = [];
+    function log() {
+      var args = Array.prototype.slice.call(arguments);
+      diag.push(new Date().toLocaleTimeString() + '  ' + args.map(function (a) {
+        if (typeof a === 'string') return a;
+        try { return JSON.stringify(a); } catch (e) { return String(a); }
+      }).join(' '));
+      if (window.console) console.log.apply(console, ['[TitleDescSearch]'].concat(args));
+    }
+    function showDetails() {
+      var lines = [
+        'Platform (tenant) ID : ' + (state.platformId || '(not found)'),
+        '3DSpace URL          : ' + (state.spaceUrl || '(not found)'),
+        'Search URL           : ' + (state.searchUrl || '(not found)'),
+        'Security context     : ' + (state.securityContext || '(not found)'),
+        'Ready                : ' + state.ready,
+        'Page URL             : ' + location.href,
+        '',
+        '--- log ---'
+      ].concat(diag);
+      $('results').innerHTML = '<pre style="margin:0;padding:12px;font:12px/1.5 Consolas,monospace;white-space:pre-wrap;word-break:break-all">' +
+        escapeHtml(lines.join('\n')) + '</pre>';
+    }
+
+    // Tenant ID: widget value first, then the "_gpid" parameter the platform adds to the frame URL.
+    function findPlatformId() {
+      var id = widget.getValue && widget.getValue('x3dPlatformId');
+      if (id) { log('platformId from widget value:', id); return id; }
+      var m = /[?&]_gpid=([^&#]+)/.exec(location.search);
+      if (m) { id = decodeURIComponent(m[1]); log('platformId from frame URL (_gpid):', id); return id; }
+      log('platformId not found in widget value or frame URL; will take the first platform the user has');
+      return null;
+    }
+
     function init(WAFData, Compass) {
-      state.platformId = widget.getValue('x3dPlatformId');
-      if (!state.platformId) {
-        setStatus('Add this widget to a 3DEXPERIENCE dashboard to search.', true);
-        return;
-      }
+      state.platformId = findPlatformId();
       setStatus('Connecting…');
 
-      Compass.getPlatformServices({
-        platformId: state.platformId,
+      var answered = false;
+      var timer = setTimeout(function () {
+        if (!answered) {
+          log('getPlatformServices gave no answer after 20 s');
+          setStatus('The platform did not answer. Click “Details” and send me what it shows.', true);
+        }
+      }, 20000);
+
+      var options = {
         onComplete: function (services) {
-          var s = Array.isArray(services) ? services[0] : services;
-          state.spaceUrl = s && s['3DSpace'];
+          answered = true; clearTimeout(timer);
+          log('platform services:', services);
+          var list = Array.isArray(services) ? services : [services];
+          var s = list.filter(function (x) { return x && (!state.platformId || x.platformId === state.platformId); })[0] || list[0];
+          if (!s) { setStatus('No platform services returned. Click “Details”.', true); return; }
+          if (!state.platformId && s.platformId) state.platformId = s.platformId;
+
+          state.spaceUrl = s['3DSpace'];
           // The search service key name varies by release; take the first key containing "search".
-          var searchKey = s && Object.keys(s).filter(function (k) { return /search/i.test(k); })[0];
+          var searchKey = Object.keys(s).filter(function (k) { return /search/i.test(k); })[0];
           var override = (pref('searchUrlOverride', '') || '').trim();
           state.searchUrl = normalizeSearchUrl(override || (searchKey && s[searchKey]));
+          log('3DSpace URL:', state.spaceUrl, '| search key:', searchKey, '| search URL:', state.searchUrl);
 
           if (!state.spaceUrl || !state.searchUrl) {
-            setStatus('Could not find the 3DSpace or search service URL. Set “Search service URL override” in the widget properties.', true);
+            setStatus('Could not find the 3DSpace or search service URL. Click “Details”, or set “Search service URL override” in the widget properties.', true);
             return;
           }
           loadSecurityContext(WAFData);
         },
-        onFailure: function () { setStatus('Could not read platform services.', true); }
-      });
+        onFailure: function (err) {
+          answered = true; clearTimeout(timer);
+          log('getPlatformServices failed:', err && (err.message || err));
+          setStatus('Could not read platform services. Click “Details”.', true);
+        }
+      };
+      if (state.platformId) options.platformId = state.platformId;
+      Compass.getPlatformServices(options);
     }
 
     function normalizeSearchUrl(url) {
@@ -237,9 +289,13 @@
               var cs = resp.collabspaces[0], c = cs.couples && cs.couples[0];
               if (c) state.securityContext = 'ctx::' + c.role.name + '.' + c.organization.name + '.' + cs.name;
             }
+            log('security context:', state.securityContext || '(none found)');
             ready();
           },
-          onFailure: function () { ready(); } // search can still run without an explicit context
+          onFailure: function (err, resp) {
+            log('security context lookup failed:', err && (err.message || err), resp || '');
+            ready(); // search can still run without an explicit context
+          }
         }
       );
     }
@@ -280,6 +336,7 @@
 
       $('searchBtn').disabled = true;
       setStatus('Searching…');
+      log('search request:', state.searchUrl, body);
 
       WAFData.authenticatedRequest(state.searchUrl + '?xrequestedwith=xmlhttprequest', {
         method: 'POST',
@@ -289,12 +346,14 @@
         timeout: 60000,
         onComplete: function (resp) {
           $('searchBtn').disabled = false;
+          log('search answered:', (resp && resp.results ? resp.results.length : 0) + ' results', resp && resp.infos);
           renderResults(resp, title, desc, DnD);
         },
         onFailure: function (err, resp) {
           $('searchBtn').disabled = false;
           var msg = (resp && (resp.error || resp.message)) || (err && err.message) || 'unknown error';
-          setStatus('Search failed: ' + msg, true);
+          log('search failed:', err && (err.message || err), resp || '');
+          setStatus('Search failed: ' + msg + ' (click “Details”)', true);
         }
       });
     }
@@ -374,6 +433,8 @@
       // UWA fires onLoad again when preferences are saved: re-read settings, don't rebind.
       if (started) { state.ready = false; if (start.reinit) start.reinit(); return; }
       started = true;
+      $('detailsBtn').addEventListener('click', showDetails);
+      log('widget started; require available:', typeof require === 'function');
       if (typeof require !== 'function') {
         setStatus('Running outside a 3DEXPERIENCE widget container: layout preview only.', true);
         var explain = function () {
@@ -396,10 +457,12 @@
         ['titleInput', 'descInput'].forEach(function (id) {
           $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
         });
+        log('platform modules loaded');
         widget.addEvent('onRefresh', go);
         start.reinit = function () { init(WAFData, Compass); };
         init(WAFData, Compass);
-      }, function () {
+      }, function (err) {
+        log('loading platform modules failed:', err && (err.requireModules || err.message || err));
         setStatus('Platform modules unavailable: open this widget from a 3DEXPERIENCE dashboard.', true);
       });
     }
