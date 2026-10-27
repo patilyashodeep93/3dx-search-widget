@@ -94,32 +94,6 @@
       td.desc { max-width: none; }
     }
   </style>
-</head>
-
-<body>
-  <div class="bar">
-    <div class="fields">
-      <div class="field">
-        <label for="titleInput">Title</label>
-        <input id="titleInput" type="search" placeholder="e.g. valve housing" autocomplete="off" />
-      </div>
-      <div class="field">
-        <label for="descInput">Description</label>
-        <input id="descInput" type="search" placeholder="e.g. stainless steel" autocomplete="off" />
-      </div>
-    </div>
-    <div class="actions">
-      <button id="searchBtn" class="primary" type="button">Search</button>
-      <button id="clearBtn" type="button">Clear</button>
-      <button id="detailsBtn" type="button" title="Show connection details and log">Details</button>
-      <span id="status" class="status" role="status" aria-live="polite"></span>
-    </div>
-  </div>
-
-  <div class="results" id="results">
-    <div class="empty">Type in Title, Description, or both, then press Search or Enter.</div>
-  </div>
-
   <script type="text/javascript">
   //<![CDATA[
   /* global widget, require, UWA */
@@ -468,23 +442,61 @@
       });
     }
 
-    $('detailsBtn').addEventListener('click', showDetails);
-    log('page script running; widget object present:', typeof widget !== 'undefined');
+    // This script runs in the page <head>, before the widget's content exists.
+    // Everything that touches the page waits for the platform's onLoad event.
+    var booted = false;
+    function boot() {
+      if (booted || !$('detailsBtn')) return booted;
+      booted = true;
+      $('detailsBtn').addEventListener('click', showDetails);
+      log('page ready; widget object present:', typeof widget !== 'undefined');
+      return true;
+    }
 
-    // Start on the platform's onLoad event. If it never arrives (it may already have fired
-    // before this script ran), start anyway after 3 seconds.
     if (typeof widget !== 'undefined' && widget.addEvent) {
-      widget.addEvent('onLoad', function () { log('onLoad received'); start(); });
-      setTimeout(function () {
-        if (!started) { log('onLoad not received after 3 s; starting anyway'); start(); }
-      }, 3000);
-    } else if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', start);
+      log('registering for onLoad');
+      widget.addEvent('onLoad', function () { log('onLoad received'); boot(); start(); });
+      // Safety net: if onLoad never arrives, start once the content is on the page.
+      var tries = 0;
+      var poll = setInterval(function () {
+        tries++;
+        if (started) { clearInterval(poll); return; }
+        if (tries >= 6 && boot()) { clearInterval(poll); log('onLoad not received after 3 s; starting anyway'); start(); }
+        if (tries > 40) clearInterval(poll);
+      }, 500);
     } else {
-      start();
+      var go = function () { boot(); start(); };
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go);
+      else go();
     }
   })();
   //]]>
   </script>
+</head>
+
+<body>
+  <div class="bar">
+    <div class="fields">
+      <div class="field">
+        <label for="titleInput">Title</label>
+        <input id="titleInput" type="search" placeholder="e.g. valve housing" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label for="descInput">Description</label>
+        <input id="descInput" type="search" placeholder="e.g. stainless steel" autocomplete="off" />
+      </div>
+    </div>
+    <div class="actions">
+      <button id="searchBtn" class="primary" type="button">Search</button>
+      <button id="clearBtn" type="button">Clear</button>
+      <button id="detailsBtn" type="button" title="Show connection details and log">Details</button>
+      <span id="status" class="status" role="status" aria-live="polite"></span>
+    </div>
+  </div>
+
+  <div class="results" id="results">
+    <div class="empty">Type in Title, Description, or both, then press Search or Enter.</div>
+  </div>
+
 </body>
 </html>
