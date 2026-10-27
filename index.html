@@ -143,7 +143,7 @@
         return '[' + predicate + ']:"' + text.replace(/["\\]/g, '') + '"';
       }
       var words = text.split(/\s+/)
-        .map(function (w) { return w.replace(/[^\p{L}\p{N}_\-.]/gu, ''); })
+        .map(function (w) { return w.replace(/[\s"'()\[\]{}:\\*?^~!+&|<>=,;\/]/g, ''); })
         .filter(Boolean);
       if (!words.length) return null;
       var parts = words.map(function (w) { return '[' + predicate + ']:' + w + '*'; });
@@ -200,13 +200,13 @@
 
     function init(WAFData, Compass) {
       state.platformId = findPlatformId();
-      setStatus('Connecting…');
+      setStatus('Connecting...');
 
       var answered = false;
       var timer = setTimeout(function () {
         if (!answered) {
           log('getPlatformServices gave no answer after 20 s');
-          setStatus('The platform did not answer. Click “Details” and send me what it shows.', true);
+          setStatus('The platform did not answer. Click "Details" and send me what it shows.', true);
         }
       }, 20000);
 
@@ -216,7 +216,7 @@
           log('platform services:', services);
           var list = Array.isArray(services) ? services : [services];
           var s = list.filter(function (x) { return x && (!state.platformId || x.platformId === state.platformId); })[0] || list[0];
-          if (!s) { setStatus('No platform services returned. Click “Details”.', true); return; }
+          if (!s) { setStatus('No platform services returned. Click "Details".', true); return; }
           if (!state.platformId && s.platformId) state.platformId = s.platformId;
 
           state.spaceUrl = s['3DSpace'];
@@ -227,7 +227,7 @@
           log('3DSpace URL:', state.spaceUrl, '| search key:', searchKey, '| search URL:', state.searchUrl);
 
           if (!state.spaceUrl || !state.searchUrl) {
-            setStatus('Could not find the 3DSpace or search service URL. Click “Details”, or set “Search service URL override” in the widget properties.', true);
+            setStatus('Could not find the 3DSpace or search service URL. Click "Details", or set "Search service URL override" in the widget properties.', true);
             return;
           }
           loadSecurityContext(WAFData);
@@ -235,7 +235,7 @@
         onFailure: function (err) {
           answered = true; clearTimeout(timer);
           log('getPlatformServices failed:', err && (err.message || err));
-          setStatus('Could not read platform services. Click “Details”.', true);
+          setStatus('Could not read platform services. Click "Details".', true);
         }
       };
       if (state.platformId) options.platformId = state.platformId;
@@ -311,7 +311,7 @@
       if (state.securityContext) body.login = { '3dspace': { SecurityContext: state.securityContext } };
 
       $('searchBtn').disabled = true;
-      setStatus('Searching…');
+      setStatus('Searching...');
       log('search request:', state.searchUrl, body);
 
       WAFData.authenticatedRequest(state.searchUrl + '?xrequestedwith=xmlhttprequest', {
@@ -329,7 +329,7 @@
           $('searchBtn').disabled = false;
           var msg = (resp && (resp.error || resp.message)) || (err && err.message) || 'unknown error';
           log('search failed:', err && (err.message || err), resp || '');
-          setStatus('Search failed: ' + msg + ' (click “Details”)', true);
+          setStatus('Search failed: ' + msg + ' (click "Details")', true);
         }
       });
     }
@@ -348,7 +348,7 @@
       var box = $('results');
 
       if (!list.length) {
-        box.innerHTML = '<div class="empty">No objects match these terms. Try fewer words, switch Match mode to “All words”, or combine with OR in the widget properties.</div>';
+        box.innerHTML = '<div class="empty">No objects match these terms. Try fewer words, switch Match mode to "All words", or combine with OR in the widget properties.</div>';
         setStatus('0 results');
         return;
       }
