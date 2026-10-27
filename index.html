@@ -121,9 +121,11 @@
   </div>
 
   <script type="text/javascript">
+  //<![CDATA[
   /* global widget, require, UWA */
   (function () {
     'use strict';
+    if (window.console) console.log('[TitleDescSearch] script loaded');
 
     // Predicates (6W tags) returned for each hit. Add more if your tenant indexes them.
     var SELECT = [
@@ -433,7 +435,6 @@
       // UWA fires onLoad again when preferences are saved: re-read settings, don't rebind.
       if (started) { state.ready = false; if (start.reinit) start.reinit(); return; }
       started = true;
-      $('detailsBtn').addEventListener('click', showDetails);
       log('widget started; require available:', typeof require === 'function');
       if (typeof require !== 'function') {
         setStatus('Running outside a 3DEXPERIENCE widget container: layout preview only.', true);
@@ -467,12 +468,23 @@
       });
     }
 
+    $('detailsBtn').addEventListener('click', showDetails);
+    log('page script running; widget object present:', typeof widget !== 'undefined');
+
+    // Start on the platform's onLoad event. If it never arrives (it may already have fired
+    // before this script ran), start anyway after 3 seconds.
     if (typeof widget !== 'undefined' && widget.addEvent) {
-      widget.addEvent('onLoad', start);
-    } else {
+      widget.addEvent('onLoad', function () { log('onLoad received'); start(); });
+      setTimeout(function () {
+        if (!started) { log('onLoad not received after 3 s; starting anyway'); start(); }
+      }, 3000);
+    } else if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', start);
+    } else {
+      start();
     }
   })();
+  //]]>
   </script>
 </body>
 </html>
