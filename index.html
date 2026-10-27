@@ -29,6 +29,7 @@
     <widget:preference type="range" name="maxResults" label="Maximum results" defaultValue="50" step="10" min="10" max="500" />
     <widget:preference type="text" name="securityContext" label="Security context override (optional)" defaultValue="" />
     <widget:preference type="text" name="searchUrlOverride" label="Search service URL override (optional)" defaultValue="" />
+    <widget:preference type="text" name="spaceUrlOverride" label="3DSpace URL override (optional)" defaultValue="" />
   </widget:preferences>
 
   <style>
@@ -198,48 +199,79 @@
       return null;
     }
 
+    // Public cloud addresses follow one pattern:
+    //   widgetDomain  https://oi000604322-eu1-ifwe.3dexperience.3ds.com/
+    //   3DSpace       https://oi000604322-eu1-space.3dexperience.3ds.com/enovia
+    //   search        https://oi000604322-eu1-fedsearch.3dexperience.3ds.com/federated/search
+    function derivedUrls() {
+      var m = /[?&]widgetDomain=([^&#]+)/.exec(location.search);
+      var domain = m ? decodeURIComponent(m[1]) : '';
+      var h = /^https:\/\/([a-z0-9]+-[a-z0-9]+)-ifwe\.([a-z0-9.\-]+)/i.exec(domain);
+      if (!h) { log('could not read widgetDomain from the frame URL:', domain || '(missing)'); return null; }
+      return {
+        space: 'https://' + h[1] + '-space.' + h[2] + '/enovia',
+        search: 'https://' + h[1] + '-fedsearch.' + h[2] + '/federated/search'
+      };
+    }
+
+    function useUrls(spaceUrl, searchUrl, source, WAFData) {
+      var spaceOverride = (pref('spaceUrlOverride', '') || '').trim().replace(/\/+$/, '');
+      var searchOverride = (pref('searchUrlOverride', '') || '').trim();
+      state.spaceUrl = spaceOverride || spaceUrl;
+      state.searchUrl = normalizeSearchUrl(searchOverride || searchUrl);
+      log('service URLs from ' + source + (spaceOverride || searchOverride ? ' (with overrides)' : '') +
+          ': 3DSpace=' + state.spaceUrl + ' | search=' + state.searchUrl);
+      if (!state.spaceUrl || !state.searchUrl) {
+        setStatus('Could not determine the 3DSpace or search URL. Set them in the widget properties (see Details).', true);
+        return;
+      }
+      loadSecurityContext(WAFData);
+    }
+
     function init(WAFData, Compass) {
       state.platformId = findPlatformId();
       setStatus('Connecting...');
+      var settled = false;
 
-      var answered = false;
-      var timer = setTimeout(function () {
-        if (!answered) {
-          log('getPlatformServices gave no answer after 20 s');
-          setStatus('The platform did not answer. Click "Details" and send me what it shows.', true);
-        }
-      }, 20000);
+      function fallback(reason) {
+        if (settled) return;
+        settled = true;
+        log('Compass services unavailable (' + reason + '); using the public cloud address pattern');
+        var d = derivedUrls();
+        useUrls(d && d.space, d && d.search, 'address pattern', WAFData);
+      }
 
-      var options = {
-        onComplete: function (services) {
-          answered = true; clearTimeout(timer);
-          log('platform services:', services);
-          var list = Array.isArray(services) ? services : [services];
-          var s = list.filter(function (x) { return x && (!state.platformId || x.platformId === state.platformId); })[0] || list[0];
-          if (!s) { setStatus('No platform services returned. Click "Details".', true); return; }
-          if (!state.platformId && s.platformId) state.platformId = s.platformId;
+      // Overrides set in the properties panel skip discovery entirely.
+      if ((pref('spaceUrlOverride', '') || '').trim() && (pref('searchUrlOverride', '') || '').trim()) {
+        settled = true;
+        useUrls(null, null, 'properties', WAFData);
+        return;
+      }
 
-          state.spaceUrl = s['3DSpace'];
-          // The search service key name varies by release; take the first key containing "search".
-          var searchKey = Object.keys(s).filter(function (k) { return /search/i.test(k); })[0];
-          var override = (pref('searchUrlOverride', '') || '').trim();
-          state.searchUrl = normalizeSearchUrl(override || (searchKey && s[searchKey]));
-          log('3DSpace URL:', state.spaceUrl, '| search key:', searchKey, '| search URL:', state.searchUrl);
+      if (!Compass || !Compass.getPlatformServices) { fallback('module not loaded'); return; }
+      setTimeout(function () { fallback('no answer after 8 s'); }, 8000);
 
-          if (!state.spaceUrl || !state.searchUrl) {
-            setStatus('Could not find the 3DSpace or search service URL. Click "Details", or set "Search service URL override" in the widget properties.', true);
-            return;
-          }
-          loadSecurityContext(WAFData);
-        },
-        onFailure: function (err) {
-          answered = true; clearTimeout(timer);
-          log('getPlatformServices failed:', err && (err.message || err));
-          setStatus('Could not read platform services. Click "Details".', true);
-        }
-      };
-      if (state.platformId) options.platformId = state.platformId;
-      Compass.getPlatformServices(options);
+      try {
+        var options = {
+          onComplete: function (services) {
+            if (settled) return;
+            log('platform services:', services);
+            var list = Array.isArray(services) ? services : [services];
+            var s = list.filter(function (x) { return x && (!state.platformId || x.platformId === state.platformId); })[0] || list[0];
+            if (!s || !s['3DSpace']) { fallback('empty answer'); return; }
+            settled = true;
+            if (!state.platformId && s.platformId) state.platformId = s.platformId;
+            var searchKey = Object.keys(s).filter(function (k) { return /search/i.test(k); })[0];
+            var d = derivedUrls();
+            useUrls(s['3DSpace'], (searchKey && s[searchKey]) || (d && d.search), 'Compass services', WAFData);
+          },
+          onFailure: function (err) { fallback('error: ' + (err && (err.message || err))); }
+        };
+        if (state.platformId) options.platformId = state.platformId;
+        Compass.getPlatformServices(options);
+      } catch (e) {
+        fallback('exception: ' + e.message);
+      }
     }
 
     function normalizeSearchUrl(url) {
@@ -269,7 +301,7 @@
             ready();
           },
           onFailure: function (err, resp) {
-            log('security context lookup failed:', err && (err.message || err), resp || '');
+            log('security context lookup failed (' + state.spaceUrl + '):', err && (err.message || err), resp || '');
             ready(); // search can still run without an explicit context
           }
         }
@@ -421,11 +453,25 @@
         });
         return;
       }
-      require([
-        'DS/WAFData/WAFData',
-        'DS/i3DXCompassServices/i3DXCompassServices',
-        'DS/DataDragAndDrop/DataDragAndDrop'
-      ], function (WAFData, Compass, DnD) {
+      require(['DS/WAFData/WAFData'], function (WAFData) {
+        var Compass = null, DnD = null, pending = 2;
+        function next() {
+          if (--pending > 0) return;
+          wire(WAFData, Compass, DnD);
+        }
+        require(['DS/i3DXCompassServices/i3DXCompassServices'],
+          function (c) { Compass = c; next(); },
+          function (err) { log('Compass module failed to load:', err && (err.requireModules || err.message)); next(); });
+        require(['DS/DataDragAndDrop/DataDragAndDrop'],
+          function (d) { DnD = d; next(); },
+          function () { log('drag and drop module not available'); next(); });
+      }, function (err) {
+        log('loading WAFData failed:', err && (err.requireModules || err.message || err));
+        setStatus('Platform modules unavailable: open this widget from a 3DEXPERIENCE dashboard.', true);
+      });
+    }
+
+    function wire(WAFData, Compass, DnD) {
         var go = function () { runSearch(WAFData, DnD); };
         $('searchBtn').addEventListener('click', go);
         $('clearBtn').addEventListener('click', clearAll);
@@ -436,10 +482,6 @@
         widget.addEvent('onRefresh', go);
         start.reinit = function () { init(WAFData, Compass); };
         init(WAFData, Compass);
-      }, function (err) {
-        log('loading platform modules failed:', err && (err.requireModules || err.message || err));
-        setStatus('Platform modules unavailable: open this widget from a 3DEXPERIENCE dashboard.', true);
-      });
     }
 
     // This script runs in the page <head>, before the widget's content exists.
