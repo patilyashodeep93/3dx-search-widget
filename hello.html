@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:widget="http://www.netvibes.com/ns/">
+<head>
+  <meta name="author" content="Test" />
+  <meta name="description" content="Minimal test widget" />
+  <meta name="apiVersion" content="1.3" />
+  <meta name="debugMode" content="false" />
+  <meta name="strictMode" content="false" />
+  <title>Hello Widget</title>
+  <link rel="stylesheet" type="text/css" href="https://uwa.netvibes.com/lib/c/UWA/assets/css/standalone.css" />
+  <script type="text/javascript" src="https://uwa.netvibes.com/lib/c/UWA/js/UWA_Standalone_Alone.js"></script>
+  <script type="text/javascript">
+  //<![CDATA[
+  console.log('[HelloWidget] script loaded');
+  widget.addEvent('onLoad', function () {
+    console.log('[HelloWidget] onLoad received, tenant: ' + widget.getValue('x3dPlatformId'));
+    widget.body.innerHTML = '<p style="padding:16px;font:14px Arial">Hello from the test widget. Tenant: ' +
+      (widget.getValue('x3dPlatformId') || '(none)') + '</p>';
+  });
+  //]]>
+  </script>
+</head>
+<body>
+  <p>Loading...</p>
+</body>
+</html>
